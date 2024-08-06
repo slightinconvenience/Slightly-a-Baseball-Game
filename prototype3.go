@@ -4,15 +4,33 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"math/rand"
 )
 
+type AtBatOutcome int
+
+const (
+	Hit AtBatOutcome = iota
+	Strikeout
+	Walk
+	Out
+)
+
+type Bases struct {
+	First  *Hitter
+	Second *Hitter
+	Third  *Hitter
+}
+
 type Hitter struct {
-	Name       string
-	Hitting    int
-	BattingAvg float64
-	AtBats     int
-	Hits       int
+	Name         string
+	Hitting      int
+	BattingAvg   float64
+	AtBats       int
+	Hits         int
+	Runs         int
+	RunsBattedIn int
 }
 
 type Pitcher struct {
@@ -22,6 +40,8 @@ type Pitcher struct {
 	OppBattingAvg float64
 	OppAtBats     int
 	OppHits       int
+	OppRuns       int
+	Innings       int
 }
 
 type Team struct {
@@ -35,9 +55,12 @@ type Game struct {
 	Score   [2]int
 }
 
-func simulateAtBat(hitter *Hitter, pitcher *Pitcher) string {
-	chance := rand.Intn(200-1+1) + 1
-	//fmt.Printf("debug: chance %d", chance)
+func (o AtBatOutcome) String() string {
+	return [...]string{"Hit", "Strikeout", "Walk", "Out"}[o]
+}
+
+func simulateAtBat(hitter *Hitter, pitcher *Pitcher) AtBatOutcome {
+	chance := rand.Intn(200) + 1
 	outcome := chance - hitter.Hitting
 	hitter.AtBats++
 	pitcher.OppAtBats++
@@ -45,35 +68,68 @@ func simulateAtBat(hitter *Hitter, pitcher *Pitcher) string {
 	if outcome < pitcher.Pitching {
 		hitter.Hits++
 		pitcher.OppHits++
-		fmt.Printf("Result: %s for %s\n", "Hit", hitter.Name)
-		//fmt.Printf("debug: hitter %d hits. pitcher %d opphits\n", hitter.Hits, pitcher.OppHits)
-		return "Hit"
+		//fmt.Printf("Result: %s for %s\n", "Hit", hitter.Name)
+		return Hit
 	} else {
 		pitcher.Strikeouts++
-		fmt.Printf("Result: %s for %s\n", "Strikeout", hitter.Name)
-		//fmt.Printf("debug: pitcher %d strikeouts\n", pitcher.Strikeouts)
-		return "Strikeout"
+		//fmt.Printf("Result: %s for %s\n", "Strikeout", hitter.Name)
+		return Strikeout
 	}
 }
 
+func advanceRunners(hitter *Hitter, bases *Bases) int {
+	runs := 0
+	if bases.Third != nil {
+		bases.Third.Runs++
+		hitter.RunsBattedIn++
+		bases.Third = nil
+		runs++
+	}
+	if bases.Second != nil {
+		bases.Third = bases.Second
+		bases.Second = nil
+	}
+	if bases.First != nil {
+		bases.Second = bases.First
+		bases.First = nil
+	}
+	bases.First = hitter
+	return runs
+}
+
+// returns the runs scores in the inning
 func simulateTopInning(home Team, away Team, inning int) int {
 	i := inning
 	outs := 0
 	runs := 0
+	bases := Bases{}
+
+InningLoop:
 	for outs < 3 {
 		for j := range away.Hitters {
 			result := simulateAtBat(&away.Hitters[j], &home.Pitchers[0])
-			if result == "Strikeout" {
+			switch result {
+			case Strikeout:
 				outs++
 				if outs >= 3 {
 					fmt.Printf("End of the top of the %d inning\n", i)
-					break
+					break InningLoop
 				}
-			} else if result == "Hit" {
-				runs++
+			case Hit:
+				runs += advanceRunners(&away.Hitters[j], &bases)
+			case Walk:
+				runs += advanceRunners(&away.Hitters[j], &bases)
+			case Out:
+				outs++
+				if outs >= 3 {
+					fmt.Printf("End of the top of the %d inning\n", i)
+					break InningLoop
+				}
 			}
 		}
 	}
+	home.Pitchers[0].OppRuns += runs
+	home.Pitchers[0].Innings++
 	return runs
 }
 
@@ -81,20 +137,34 @@ func simulateBottomInning(home Team, away Team, inning int) int {
 	i := inning
 	outs := 0
 	runs := 0
+	bases := &Bases{}
+
+InningLoop:
 	for outs < 3 {
 		for j := range home.Hitters {
 			result := simulateAtBat(&home.Hitters[j], &away.Pitchers[0])
-			if result == "Strikeout" {
+			switch result {
+			case Strikeout:
 				outs++
 				if outs >= 3 {
-					fmt.Printf("End of the top of the %d inning\n", i)
-					break
+					fmt.Printf("End of the bottom of the %d inning\n", i)
+					break InningLoop
 				}
-			} else if result == "Hit" {
-				runs++
+			case Hit:
+				runs += advanceRunners(&home.Hitters[j], bases)
+			case Walk:
+				runs += advanceRunners(&home.Hitters[j], bases)
+			case Out:
+				outs++
+				if outs >= 3 {
+					fmt.Printf("End of the bottom of the %d inning\n", i)
+					break InningLoop
+				}
 			}
 		}
 	}
+	away.Pitchers[0].OppRuns += runs
+	away.Pitchers[0].Innings++
 	return runs
 }
 
@@ -111,11 +181,13 @@ func Statistics(team Team, pitchers []Pitcher, hitters []Hitter) {
 	fmt.Printf("Team: %s\n", team.Name)
 	for _, pitcher := range pitchers {
 		pitcher.OppBattingAvg = float64(pitcher.OppHits) / float64(pitcher.OppAtBats)
-		fmt.Printf("P | %s | %f | %d | %d |\n", pitcher.Name, pitcher.OppBattingAvg, pitcher.OppHits, pitcher.Strikeouts)
+		pitcher.OppBattingAvg = math.Round(pitcher.OppBattingAvg*1000) / 1000
+		fmt.Printf("P | Name %s | OppAvg %.3f | Hits %d | SO %d | Runs %d | \n", pitcher.Name, pitcher.OppBattingAvg, pitcher.OppHits, pitcher.Strikeouts, pitcher.OppRuns)
 	}
 	for _, hitter := range hitters {
 		hitter.BattingAvg = float64(hitter.Hits) / float64(hitter.AtBats)
-		fmt.Printf("H | %s | %f | %d |\n", hitter.Name, hitter.BattingAvg, hitter.Hits)
+		hitter.BattingAvg = math.Round(hitter.BattingAvg*1000) / 1000
+		fmt.Printf("H | Name %s | Avg %.3f | Hits %d | Runs %d | RBIs %d |\n", hitter.Name, hitter.BattingAvg, hitter.Hits, hitter.Runs, hitter.RunsBattedIn)
 	}
 }
 
@@ -158,20 +230,20 @@ func main() {
 	homeScore := 0
 	awayScore := 0
 
-	for i := 1; i < game.Innings; i++ {
-		homeScore, awayScore = simulateInning(homeTeam, awayTeam, i)
+	for i := 0; i < game.Innings; i++ {
+		homeScore, awayScore = simulateInning(homeTeam, awayTeam, i+1)
 		game.Score[0] += homeScore
 		game.Score[1] += awayScore
-		fmt.Print("Inning: ", i, " Home: ", game.Score[0], " Away: ", game.Score[1], "\n")
+		fmt.Print("Inning: ", i+1, " Home: ", game.Score[0], " Away: ", game.Score[1], "\n")
 	}
 
 	inning := game.Innings
 	for game.Score[0] == game.Score[1] {
 		inning++
-		homeScore, awayScore = simulateInning(homeTeam, awayTeam, inning)
+		homeScore, awayScore = simulateInning(homeTeam, awayTeam, inning+1)
 		game.Score[0] += homeScore
 		game.Score[1] += awayScore
-		fmt.Print("Inning: ", inning, " Home: ", game.Score[0], " Away: ", game.Score[1], "\n")
+		fmt.Print("Inning: ", inning+1, " Home: ", game.Score[0], " Away: ", game.Score[1], "\n")
 	}
 
 	Statistics(homeTeam, homePitchers, homeHitters)
